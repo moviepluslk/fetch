@@ -1,8 +1,0 @@
-{
-  "routes": [
-    {
-      "src": "/hash/(.*)",
-      "dest": "/api/handler"
-    }
-  ]
-}
