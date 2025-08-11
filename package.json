@@ -1,11 +1,10 @@
 {
   "name": "cineru-scraper",
   "version": "1.0.0",
-  "description": "A Cloudflare Worker to scrape TV show data from cineru.lk",
+  "description": "A Node.js application to scrape TV show data from cineru.lk",
   "main": "index.js",
   "scripts": {
-    "start": "node index.js",
-    "deploy": "wrangler deploy"
+    "start": "node index.js"
   },
   "dependencies": {
     "node-fetch": "^2.6.7"
@@ -14,9 +13,5 @@
     "node": ">=16.0.0"
   },
   "author": "",
-  "license": "MIT",
-  "devDependencies": {
-    "@cloudflare/workers-types": "^4.20230404.0",
-    "wrangler": "^3.0.0"
-  }
+  "license": "MIT"
 }
