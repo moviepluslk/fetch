@@ -1,6 +1,5 @@
 export const config = {
   runtime: 'edge',
-  maxDuration: 30, // Set maximum duration if available on your plan
 };
 
 export default async function handler(request) {
@@ -120,105 +119,6 @@ async function getTrailerUrl(tvId, tmdbApiKey) {
   }
 }
 
-// Optimized batch processing for episodes
-async function processBatch(batch, tvId, tmdbApiKey, cookieHeader) {
-  const batchPromises = batch.map(async (episode) => {
-    try {
-      // Get episode metadata from TMDB
-      const episodeResponse = await fetch(
-        `https://api.themoviedb.org/3/tv/${tvId}/season/${episode.seasonNumber}/episode/${episode.episodeNumber}?api_key=${tmdbApiKey}&append_to_response=credits,images,external_ids`
-      );
-      const episodeData = await episodeResponse.json();
-
-      if (episodeData.success === false) {
-        return {
-          seasonNumber: episode.seasonNumber,
-          episodeNumber: episode.episodeNumber,
-          error: episodeData.status_message || "Episode not found",
-        };
-      }
-
-      // Fetch episode page with timeout
-      const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), 5000); // 5 second timeout per episode
-
-      try {
-        const epPageResponse = await fetch(episode.url, {
-          signal: controller.signal,
-          headers: {
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
-            "Accept-Language": "en-LK,en;q=0.9,si;q=0.8",
-            "Accept-Encoding": "gzip, deflate, br",
-            "Connection": "keep-alive",
-            "Upgrade-Insecure-Requests": "1",
-            "Cookie": cookieHeader,
-          },
-        });
-        clearTimeout(timeoutId);
-
-        if (!epPageResponse.ok) {
-          return {
-            seasonNumber: episode.seasonNumber,
-            episodeNumber: episode.episodeNumber,
-            error: `Failed to fetch episode page: ${epPageResponse.status}`,
-          };
-        }
-
-        const epHtmlContent = await epPageResponse.text();
-        const extractedData = extractPageData(epHtmlContent, episode.url);
-        const downloadLinks = await fetchDownloadLinks(extractedData, episode.url, cookieHeader);
-
-        return {
-          seasonNumber: episode.seasonNumber,
-          episodeNumber: episode.episodeNumber,
-          episodeTitle: episodeData.name || null,
-          overview: episodeData.overview || null,
-          airDate: episodeData.air_date || null,
-          runtime: episodeData.runtime || null,
-          productionCode: episodeData.production_code || null,
-          stillPath: episodeData.still_path ? `https://image.tmdb.org/t/p/original${episodeData.still_path}` : null,
-          voteAverage: episodeData.vote_average || null,
-          voteCount: episodeData.vote_count || null,
-          crew: episodeData.credits?.crew?.slice(0, 5).map(member => ({
-            id: member.id,
-            name: member.name,
-            job: member.job,
-            department: member.department,
-            profileUrl: member.profile_path ? `https://image.tmdb.org/t/p/original${member.profile_path}` : null,
-          })) || [],
-          guestStars: episodeData.credits?.guest_stars?.slice(0, 5).map(star => ({
-            id: star.id,
-            name: star.name,
-            character: star.character,
-            profileUrl: star.profile_path ? `https://image.tmdb.org/t/p/original${star.profile_path}` : null,
-          })) || [],
-          downloadLinks: groupLinksByQualityAndSize(downloadLinks),
-        };
-      } catch (fetchError) {
-        clearTimeout(timeoutId);
-        if (fetchError.name === 'AbortError') {
-          return {
-            seasonNumber: episode.seasonNumber,
-            episodeNumber: episode.episodeNumber,
-            error: "Episode page fetch timeout",
-          };
-        }
-        throw fetchError;
-      }
-    } catch (error) {
-      console.error(`Error processing episode ${episode.episodeNumber}:`, error);
-      return {
-        seasonNumber: episode.seasonNumber,
-        episodeNumber: episode.episodeNumber,
-        error: `Failed to process episode: ${error.message}`,
-      };
-    }
-  });
-
-  return await Promise.all(batchPromises);
-}
-
 async function handleHashRequest(request, url) {
   if (request.method !== "GET") {
     return new Response(JSON.stringify({ error: "Method not allowed" }), {
@@ -251,12 +151,8 @@ async function handleHashRequest(request, url) {
   const tmdbApiKey = "e9b08082909c15ce0702a117a0d9fc8a";
 
   try {
-    // Step 1: Fetch the series page with timeout
-    const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), 10000); // 10 second timeout
-
+    // Step 1: Fetch the series page
     const mainPageResponse = await fetch(targetUrl, {
-      signal: controller.signal,
       headers: {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
         "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
@@ -267,7 +163,6 @@ async function handleHashRequest(request, url) {
         "Cookie": cookieHeader,
       },
     });
-    clearTimeout(timeoutId);
 
     if (!mainPageResponse.ok) {
       throw new Error(`Failed to fetch series page: ${mainPageResponse.status}`);
@@ -367,7 +262,7 @@ async function handleHashRequest(request, url) {
       });
     }
 
-    // Step 4: Get show-wide data (logo, trailer) in parallel
+    // Step 4: Get show-wide data (logo, trailer)
     const [logoUrl, trailerUrl] = await Promise.all([
       getShowLogos(tvId, tmdbApiKey),
       getTrailerUrl(tvId, tmdbApiKey)
@@ -382,9 +277,8 @@ async function handleHashRequest(request, url) {
       return acc;
     }, {});
 
-    // Step 6: Process each season with optimized batching
+    // Step 6: Process each season
     const allSeasonsData = {};
-    const BATCH_SIZE = 4; // Process 4 episodes concurrently per batch
     
     for (const [seasonNumber, seasonEpisodes] of Object.entries(episodesBySeason)) {
       const seasonNum = parseInt(seasonNumber);
@@ -403,22 +297,96 @@ async function handleHashRequest(request, url) {
         seasonVoteAverage = seasonData.vote_average || null;
       }
 
-      // Process episodes in batches to avoid timeout
-      const allEpisodeDetails = [];
+      // Step 7: Fetch episode details in parallel for this season
+      const episodeDetailsPromises = seasonEpisodes.map(episode =>
+        fetch(`https://api.themoviedb.org/3/tv/${tvId}/season/${episode.seasonNumber}/episode/${episode.episodeNumber}?api_key=${tmdbApiKey}&append_to_response=credits,images,external_ids`)
+          .then(res => res.json())
+          .then(data => ({ episode, data }))
+          .catch(error => ({
+            episode,
+            data: { success: false, status_message: error.message },
+          })));
+
+      const episodeResults = await Promise.all(episodeDetailsPromises);
+      const episodeDetails = [];
       let hasValidDownloadLinks = false;
 
-      for (let i = 0; i < seasonEpisodes.length; i += BATCH_SIZE) {
-        const batch = seasonEpisodes.slice(i, i + BATCH_SIZE);
-        const batchResults = await processBatch(batch, tvId, tmdbApiKey, cookieHeader);
-        
-        // Check if any episode in this batch has valid download links
-        batchResults.forEach(episode => {
-          if (episode.downloadLinks && episode.downloadLinks.length > 0) {
+      // Step 8: Process episode pages sequentially for this season
+      for (const { episode, data: episodeData } of episodeResults) {
+        try {
+          if (episodeData.success === false) {
+            episodeDetails.push({
+              seasonNumber: episode.seasonNumber,
+              episodeNumber: episode.episodeNumber,
+              error: episodeData.status_message || "Episode not found",
+            });
+            continue;
+          }
+
+          // Fetch episode page
+          const epPageResponse = await fetch(episode.url, {
+            headers: {
+              "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+              "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
+              "Accept-Language": "en-LK,en;q=0.9,si;q=0.8",
+              "Accept-Encoding": "gzip, deflate, br",
+              "Connection": "keep-alive",
+              "Upgrade-Insecure-Requests": "1",
+              "Cookie": cookieHeader,
+            },
+          });
+
+          if (!epPageResponse.ok) {
+            episodeDetails.push({
+              seasonNumber: episode.seasonNumber,
+              episodeNumber: episode.episodeNumber,
+              error: `Failed to fetch episode page: ${epPageResponse.status}`,
+            });
+            continue;
+          }
+
+          const epHtmlContent = await epPageResponse.text();
+          const extractedData = extractPageData(epHtmlContent, episode.url);
+          const downloadLinks = await fetchDownloadLinks(extractedData, episode.url, cookieHeader);
+
+          if (downloadLinks.length > 0) {
             hasValidDownloadLinks = true;
           }
-        });
 
-        allEpisodeDetails.push(...batchResults);
+          episodeDetails.push({
+            seasonNumber: episode.seasonNumber,
+            episodeNumber: episode.episodeNumber,
+            episodeTitle: episodeData.name || null,
+            overview: episodeData.overview || null,
+            airDate: episodeData.air_date || null,
+            runtime: episodeData.runtime || null,
+            productionCode: episodeData.production_code || null,
+            stillPath: episodeData.still_path ? `https://image.tmdb.org/t/p/original${episodeData.still_path}` : null,
+            voteAverage: episodeData.vote_average || null,
+            voteCount: episodeData.vote_count || null,
+            crew: episodeData.credits?.crew?.map(member => ({
+              id: member.id,
+              name: member.name,
+              job: member.job,
+              department: member.department,
+              profileUrl: member.profile_path ? `https://image.tmdb.org/t/p/original${member.profile_path}` : null,
+            })) || [],
+            guestStars: episodeData.credits?.guest_stars?.map(star => ({
+              id: star.id,
+              name: star.name,
+              character: star.character,
+              profileUrl: star.profile_path ? `https://image.tmdb.org/t/p/original${star.profile_path}` : null,
+            })) || [],
+            downloadLinks: groupLinksByQualityAndSize(downloadLinks),
+          });
+        } catch (error) {
+          console.error(`Error processing episode ${episode.episodeNumber}:`, error);
+          episodeDetails.push({
+            seasonNumber: episode.seasonNumber,
+            episodeNumber: episode.episodeNumber,
+            error: `Failed to process episode: ${error.message}`,
+          });
+        }
       }
 
       // Store season data with enhanced information
@@ -427,7 +395,7 @@ async function handleHashRequest(request, url) {
         seasonOverview: seasonOverview,
         seasonPosterPath: seasonPosterPath ? `https://image.tmdb.org/t/p/original${seasonPosterPath}` : null,
         seasonVoteAverage: seasonVoteAverage,
-        episodes: allEpisodeDetails,
+        episodes: episodeDetails,
         hasValidDownloadLinks: hasValidDownloadLinks,
       };
     }
@@ -498,17 +466,7 @@ async function fetchGoogleDriveFileInfo(driveUrl) {
       return { quality: 'unknown', size: 'unknown', mimeType: 'video/mp4' };
     }
     const fileId = fileIdMatch[1];
-    
-    // Add timeout to Google Drive API call
-    const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), 3000); // 3 second timeout
-    
-    const response = await fetch(
-      `https://www.googleapis.com/drive/v3/files/${fileId}?fields=name,size,mimeType,videoMediaMetadata&key=${googleDriveApiKey}`,
-      { signal: controller.signal }
-    );
-    clearTimeout(timeoutId);
-    
+    const response = await fetch(`https://www.googleapis.com/drive/v3/files/${fileId}?fields=name,size,mimeType,videoMediaMetadata&key=${googleDriveApiKey}`);
     if (!response.ok) {
       console.error('Google Drive API error:', await response.text());
       return { quality: 'unknown', size: 'unknown', mimeType: 'video/mp4' };
@@ -544,11 +502,7 @@ async function fetchGoogleDriveFileInfo(driveUrl) {
     const mimeType = data.mimeType || 'video/mp4';
     return { quality, size, mimeType };
   } catch (error) {
-    if (error.name === 'AbortError') {
-      console.error('Google Drive API timeout');
-    } else {
-      console.error('Error fetching Google Drive info:', error);
-    }
+    console.error('Error fetching Google Drive info:', error);
     return { quality: 'unknown', size: 'unknown', mimeType: 'video/mp4' };
   }
 }
@@ -560,14 +514,7 @@ async function fetchPixeldrainFileInfo(url) {
       return { quality: 'unknown', size: 'unknown', mimeType: 'video/mp4' };
     }
     const id = idMatch[1];
-    
-    // Add timeout to Pixeldrain API call
-    const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), 3000); // 3 second timeout
-    
-    const response = await fetch(`https://pixeldrain.com/api/file/${id}/info`, { signal: controller.signal });
-    clearTimeout(timeoutId);
-    
+    const response = await fetch(`https://pixeldrain.com/api/file/${id}/info`);
     if (!response.ok) {
       return { quality: 'unknown', size: 'unknown', mimeType: 'video/mp4' };
     }
@@ -577,11 +524,7 @@ async function fetchPixeldrainFileInfo(url) {
     const quality = 'unknown';
     return { quality, size, mimeType };
   } catch (error) {
-    if (error.name === 'AbortError') {
-      console.error('Pixeldrain API timeout');
-    } else {
-      console.error('Error fetching Pixeldrain info:', error);
-    }
+    console.error('Error fetching Pixeldrain info:', error);
     return { quality: 'unknown', size: 'unknown', mimeType: 'video/mp4' };
   }
 }
@@ -665,14 +608,9 @@ async function fetchDownloadLinks(extractedData, originalUrl, cookieHeader) {
     formData.append('action', 'cs_download_data');
     formData.append('post_id', extractedData.postId);
 
-    // Add timeout to AJAX request
-    const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), 5000); // 5 second timeout
-
     const ajaxResponse = await fetch(extractedData.ajaxUrl, {
       method: 'POST',
       body: formData,
-      signal: controller.signal,
       headers: {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
         "Accept-Language": "en-LK,en;q=0.9,si;q=0.8",
@@ -681,7 +619,6 @@ async function fetchDownloadLinks(extractedData, originalUrl, cookieHeader) {
         "Cookie": cookieHeader,
       },
     });
-    clearTimeout(timeoutId);
 
     if (ajaxResponse.ok) {
       const ajaxData = await ajaxResponse.text();
@@ -698,11 +635,7 @@ async function fetchDownloadLinks(extractedData, originalUrl, cookieHeader) {
       }
     }
   } catch (error) {
-    if (error.name === 'AbortError') {
-      console.error('Download links fetch timeout');
-    } else {
-      console.error('Error fetching download links:', error);
-    }
+    console.error('Error fetching download links:', error);
   }
 
   return downloadLinks;
@@ -730,4 +663,39 @@ async function extractDownloadLinksFromHtml(htmlContent) {
       url: cleanUrl,
       quality: 'unknown',
       size: 'unknown',
-      mimeType
+      mimeType: 'video/mp4',
+    });
+  }
+
+  let pixeldrainMatch;
+  while ((pixeldrainMatch = pixeldrainPattern.exec(panelContent)) !== null) {
+    const cleanUrl = pixeldrainMatch[1].replace(/['">\s]+$/, '');
+    links.push({
+      type: 'pixeldrain',
+      url: cleanUrl,
+      quality: 'unknown',
+      size: 'unknown',
+      mimeType: 'video/mp4',
+    });
+  }
+
+  const uniqueLinks = links.filter((link, index, self) =>
+    index === self.findIndex(l => l.url === link.url)
+  );
+
+  // Fetch file info for each link
+  return await Promise.all(uniqueLinks.map(async (link) => {
+    if (link.type === 'google_drive') {
+      const info = await fetchGoogleDriveFileInfo(link.url);
+      link.quality = info.quality;
+      link.size = convertSizeFormat(info.size);
+      link.mimeType = info.mimeType;
+    } else if (link.type === 'pixeldrain') {
+      const info = await fetchPixeldrainFileInfo(link.url);
+      link.quality = info.quality;
+      link.size = convertSizeFormat(info.size);
+      link.mimeType = info.mimeType;
+    }
+    return link;
+  }));
+}
