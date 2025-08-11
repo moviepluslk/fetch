@@ -1,24 +1,22 @@
 {
-  "name": "tv-show-scraper-api",
+  "name": "cineru-scraper",
   "version": "1.0.0",
-  "description": "API for scraping TV show episode data and download links",
+  "description": "A Cloudflare Worker to scrape TV show data from cineru.lk",
   "main": "index.js",
-  "type": "module",
   "scripts": {
     "start": "node index.js",
-    "dev": "node index.js"
-  },
-  "engines": {
-    "node": ">=18.0.0"
+    "deploy": "wrangler deploy"
   },
   "dependencies": {
-    "express": "^4.18.2"
+    "node-fetch": "^2.6.7"
   },
-  "keywords": [
-    "api",
-    "tv-shows",
-    "scraper"
-  ],
-  "author": "Your Name",
-  "license": "MIT"
+  "engines": {
+    "node": ">=16.0.0"
+  },
+  "author": "",
+  "license": "MIT",
+  "devDependencies": {
+    "@cloudflare/workers-types": "^4.20230404.0",
+    "wrangler": "^3.0.0"
+  }
 }
