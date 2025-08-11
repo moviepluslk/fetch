@@ -1,117 +1,79 @@
-import express from 'express';
+const fs = require('fs').promises;
 
-const app = express();
-const PORT = process.env.PORT || 3000;
-
-// Middleware
-app.use(express.json());
-app.use(express.urlencoded({ extended: true }));
-
-// CORS middleware
-app.use((req, res, next) => {
-  res.header('Access-Control-Allow-Origin', '*');
-  res.header('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
-  res.header('Access-Control-Allow-Headers', 'Content-Type');
-  
-  if (req.method === 'OPTIONS') {
-    return res.sendStatus(200);
-  }
-  next();
+addEventListener('fetch', event => {
+  event.respondWith(handleRequest(event.request));
 });
 
-// Health check endpoint
-app.get('/', (req, res) => {
-  res.json({ 
-    status: 'OK', 
-    message: 'TV Show Scraper API is running',
-    endpoints: {
-      hash: '/hash/{base64_encoded_url}'
-    }
-  });
-});
-
-// Hash endpoint handler
-app.get('/hash/:encodedUrl', async (req, res) => {
-  try {
-    // Create a mock request object for the handler
-    const mockRequest = {
-      method: 'GET',
-      url: `https://example.com/hash/${req.params.encodedUrl}`
-    };
-    
-    const mockUrl = new URL(mockRequest.url);
-    const response = await handleHashRequest(mockRequest, mockUrl);
-    
-    // Parse the Response object and send the data
-    const data = await response.json();
-    res.status(response.status).json(data);
-  } catch (error) {
-    res.status(500).json({ 
-      success: false, 
-      error: error.message 
+async function handleRequest(request) {
+  // Handle CORS preflight requests
+  if (request.method === "OPTIONS") {
+    return new Response(null, {
+      headers: {
+        "Access-Control-Allow-Origin": "*",
+        "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
+        "Access-Control-Allow-Headers": "Content-Type",
+      },
     });
   }
-});
+  try {
+    const url = new URL(request.url);
+    if (url.pathname.startsWith("/hash/")) {
+      return await handleHashRequest(request, url);
+    }
+    return new Response(JSON.stringify({ error: "Not Found" }), {
+      status: 404,
+      headers: {
+        "Content-Type": "application/json",
+        "Access-Control-Allow-Origin": "*",
+      },
+    });
+  } catch (error) {
+    return new Response(JSON.stringify({ error: error.message }), {
+      status: 500,
+      headers: {
+        "Content-Type": "application/json",
+        "Access-Control-Allow-Origin": "*",
+      },
+    });
+  }
+}
 
-// Error handling middleware
-app.use((error, req, res, next) => {
-  console.error('Error:', error);
-  res.status(500).json({ 
-    success: false, 
-    error: 'Internal server error' 
-  });
-});
-
-// 404 handler
-app.use((req, res) => {
-  res.status(404).json({ 
-    error: 'Not Found',
-    message: 'Endpoint not found' 
-  });
-});
-
-app.listen(PORT, () => {
-  console.log(`Server running on port ${PORT}`);
-  console.log(`Health check: http://localhost:${PORT}/`);
-});
-
-// Your original functions (slightly modified for Express)
 async function getCookiesFromKV() {
   try {
-    const cookieData = JSON.parse(process.env.COOKIE_DATA || "[]");
+    const cookieData = JSON.parse(await fs.readFile('cookie.json', 'utf8'));
     if (!cookieData || !Array.isArray(cookieData)) {
-      console.warn("No valid cookie data found in env");
+      console.warn("No valid cookie data found in cookie.json");
       return [];
     }
     return cookieData;
   } catch (error) {
-    console.error("Error parsing cookies from env:", error);
+    console.error("Error fetching cookies from cookie.json:", error);
     return [];
   }
 }
 
+// Simplified season and episode detection
 function detectSeasonAndEpisodeFromUrl(url) {
   const seasonMatch = url.match(/s(\d{1,2})/i);
   const seasonNumber = seasonMatch ? parseInt(seasonMatch[1]) : 1;
-
   const episodeMatch = url.match(/e(\d{1,2})/i);
   const episodeNumber = episodeMatch ? parseInt(episodeMatch[1]) : null;
-
   return { seasonNumber, episodeNumber };
 }
 
+// New function to get show logos from TMDB
 async function getShowLogos(tvId, tmdbApiKey) {
   try {
     const imagesResponse = await fetch(`https://api.themoviedb.org/3/tv/${tvId}/images?api_key=${tmdbApiKey}&include_image_language=en,null`);
     const imagesData = await imagesResponse.json();
-    
+ 
     let logoUrl = null;
     if (imagesData.logos && imagesData.logos.length > 0) {
       const englishLogo = imagesData.logos.find(logo => logo.iso_639_1 === 'en');
       const selectedLogo = englishLogo || imagesData.logos[0];
       logoUrl = `https://image.tmdb.org/t/p/original${selectedLogo.file_path}`;
     }
-    
+ 
     return logoUrl;
   } catch (error) {
     console.error('Error fetching show logos:', error);
@@ -119,29 +81,30 @@ async function getShowLogos(tvId, tmdbApiKey) {
   }
 }
 
+// New function to get trailer URL
 async function getTrailerUrl(tvId, tmdbApiKey) {
   try {
     const videosResponse = await fetch(`https://api.themoviedb.org/3/tv/${tvId}/videos?api_key=${tmdbApiKey}&language=en-US`);
     const videosData = await videosResponse.json();
-    
+ 
     let trailerUrl = null;
     if (videosData.results && videosData.results.length > 0) {
-      const trailer = videosData.results.find(video => 
-        video.type === 'Trailer' && 
-        video.site === 'YouTube' && 
+      const trailer = videosData.results.find(video =>
+        video.type === 'Trailer' &&
+        video.site === 'YouTube' &&
         video.official === true
-      ) || videosData.results.find(video => 
-        video.type === 'Trailer' && 
+      ) || videosData.results.find(video =>
+        video.type === 'Trailer' &&
         video.site === 'YouTube'
-      ) || videosData.results.find(video => 
+      ) || videosData.results.find(video =>
         video.site === 'YouTube'
       );
-      
+   
       if (trailer) {
         trailerUrl = `https://www.youtube.com/watch?v=${trailer.key}`;
       }
     }
-    
+ 
     return trailerUrl;
   } catch (error) {
     console.error('Error fetching trailer URL:', error);
@@ -159,12 +122,12 @@ async function handleHashRequest(request, url) {
       },
     });
   }
-
+  // Decode base64 URL
   const base64 = url.pathname.split("/hash/")[1];
   let targetUrl;
   try {
     targetUrl = atob(base64);
-    new URL(targetUrl);
+    new URL(targetUrl); // Validate URL
   } catch (error) {
     return new Response(JSON.stringify({ error: "Invalid base64 encoded URL" }), {
       status: 400,
@@ -174,12 +137,11 @@ async function handleHashRequest(request, url) {
       },
     });
   }
-
   const cookies = await getCookiesFromKV();
   const cookieHeader = cookies.map(cookie => `${cookie.name}=${cookie.value}`).join("; ");
   const tmdbApiKey = "e9b08082909c15ce0702a117a0d9fc8a";
-
   try {
+    // Step 1: Fetch the series page
     const mainPageResponse = await fetch(targetUrl, {
       headers: {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
@@ -191,16 +153,13 @@ async function handleHashRequest(request, url) {
         "Cookie": cookieHeader,
       },
     });
-
     if (!mainPageResponse.ok) {
       throw new Error(`Failed to fetch series page: ${mainPageResponse.status}`);
     }
-
     const htmlContent = await mainPageResponse.text();
-
+    // Extract IMDb link
     const imdbLinkMatch = htmlContent.match(/<a[^>]*class=["']btn["'][^>]*href=["'](https:\/\/www\.imdb\.com\/title\/[^"']+)["'][^>]*data-lity/i);
     const imdbLink = imdbLinkMatch ? imdbLinkMatch[1] : null;
-
     if (!imdbLink) {
       return new Response(JSON.stringify({ error: "Could not find IMDb link on the page" }), {
         status: 404,
@@ -210,7 +169,6 @@ async function handleHashRequest(request, url) {
         },
       });
     }
-
     const imdbId = imdbLink.match(/tt\d+/i)?.[0];
     if (!imdbId) {
       return new Response(JSON.stringify({ error: "Invalid IMDb ID format" }), {
@@ -221,14 +179,14 @@ async function handleHashRequest(request, url) {
         },
       });
     }
-
+    // Step 2: Extract episode links with simplified season and episode detection
     const episodeLinks = [];
     const episodeLinkPattern = /<a class="epi_item" href=["'](https:\/\/cineru\.lk\/[^"']+)["'][^>]*>Episode \d+(?:-end)?\s*<\/a>/gi;
     let episodeMatch;
     while ((episodeMatch = episodeLinkPattern.exec(htmlContent)) !== null) {
       const epUrl = episodeMatch[1];
       const { seasonNumber, episodeNumber } = detectSeasonAndEpisodeFromUrl(epUrl);
-      
+   
       if (episodeNumber) {
         episodeLinks.push({
           url: epUrl,
@@ -237,14 +195,13 @@ async function handleHashRequest(request, url) {
         });
       }
     }
-
     if (episodeLinks.length === 0) {
       const altEpisodeLinkPattern = /<a[^>]*href=["'](https:\/\/cineru\.lk\/[^"']*e\d{1,2}[^"']*)["'][^>]*>Episode \d+/gi;
       let altEpisodeMatch;
       while ((altEpisodeMatch = altEpisodeLinkPattern.exec(htmlContent)) !== null) {
         const epUrl = altEpisodeMatch[1];
         const { seasonNumber, episodeNumber } = detectSeasonAndEpisodeFromUrl(epUrl);
-        
+     
         if (episodeNumber) {
           episodeLinks.push({
             url: epUrl,
@@ -253,7 +210,6 @@ async function handleHashRequest(request, url) {
           });
         }
       }
-
       if (episodeLinks.length === 0) {
         return new Response(JSON.stringify({
           error: "No episode links found on the series page",
@@ -271,10 +227,9 @@ async function handleHashRequest(request, url) {
         });
       }
     }
-
+    // Step 3: Get TMDB ID from IMDb ID
     const findResponse = await fetch(`https://api.themoviedb.org/3/find/${imdbId}?api_key=${tmdbApiKey}&external_source=imdb_id`);
     const findData = await findResponse.json();
-
     const tvId = findData.tv_results[0]?.id;
     if (!tvId) {
       return new Response(JSON.stringify({ error: "Could not find TV show on TMDB" }), {
@@ -285,12 +240,12 @@ async function handleHashRequest(request, url) {
         },
       });
     }
-
+    // Step 4: Get show-wide data (logo, trailer)
     const [logoUrl, trailerUrl] = await Promise.all([
       getShowLogos(tvId, tmdbApiKey),
       getTrailerUrl(tvId, tmdbApiKey)
     ]);
-
+    // Step 5: Group episodes by season
     const episodesBySeason = episodeLinks.reduce((acc, episode) => {
       if (!acc[episode.seasonNumber]) {
         acc[episode.seasonNumber] = [];
@@ -298,25 +253,25 @@ async function handleHashRequest(request, url) {
       acc[episode.seasonNumber].push(episode);
       return acc;
     }, {});
-
+    // Step 6: Process each season
     const allSeasonsData = {};
-    
+ 
     for (const [seasonNumber, seasonEpisodes] of Object.entries(episodesBySeason)) {
       const seasonNum = parseInt(seasonNumber);
-      
+   
       const seasonResponse = await fetch(`https://api.themoviedb.org/3/tv/${tvId}/season/${seasonNum}?api_key=${tmdbApiKey}`);
       const seasonData = await seasonResponse.json();
-      
+   
       let seasonPosterPath = null;
       let seasonOverview = "No season overview available";
       let seasonVoteAverage = null;
-      
+   
       if (seasonResponse.ok && seasonData.success !== false) {
         seasonPosterPath = seasonData.poster_path;
         seasonOverview = seasonData.overview || "No season overview available";
         seasonVoteAverage = seasonData.vote_average || null;
       }
-
+      // Step 7: Fetch episode details in parallel for this season
       const episodeDetailsPromises = seasonEpisodes.map(episode =>
         fetch(`https://api.themoviedb.org/3/tv/${tvId}/season/${episode.seasonNumber}/episode/${episode.episodeNumber}?api_key=${tmdbApiKey}&append_to_response=credits,images,external_ids`)
           .then(res => res.json())
@@ -325,11 +280,10 @@ async function handleHashRequest(request, url) {
             episode,
             data: { success: false, status_message: error.message },
           })));
-
       const episodeResults = await Promise.all(episodeDetailsPromises);
       const episodeDetails = [];
       let hasValidDownloadLinks = false;
-
+      // Step 8: Process episode pages sequentially for this season
       for (const { episode, data: episodeData } of episodeResults) {
         try {
           if (episodeData.success === false) {
@@ -340,7 +294,6 @@ async function handleHashRequest(request, url) {
             });
             continue;
           }
-
           const epPageResponse = await fetch(episode.url, {
             headers: {
               "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
@@ -352,7 +305,6 @@ async function handleHashRequest(request, url) {
               "Cookie": cookieHeader,
             },
           });
-
           if (!epPageResponse.ok) {
             episodeDetails.push({
               seasonNumber: episode.seasonNumber,
@@ -361,15 +313,12 @@ async function handleHashRequest(request, url) {
             });
             continue;
           }
-
           const epHtmlContent = await epPageResponse.text();
           const extractedData = extractPageData(epHtmlContent, episode.url);
           const downloadLinks = await fetchDownloadLinks(extractedData, episode.url, cookieHeader);
-
           if (downloadLinks.length > 0) {
             hasValidDownloadLinks = true;
           }
-
           episodeDetails.push({
             seasonNumber: episode.seasonNumber,
             episodeNumber: episode.episodeNumber,
@@ -405,7 +354,6 @@ async function handleHashRequest(request, url) {
           });
         }
       }
-
       allSeasonsData[seasonNum] = {
         seasonNumber: seasonNum,
         seasonOverview: seasonOverview,
@@ -415,9 +363,7 @@ async function handleHashRequest(request, url) {
         hasValidDownloadLinks: hasValidDownloadLinks,
       };
     }
-
     const hasAnyValidDownloadLinks = Object.values(allSeasonsData).some(season => season.hasValidDownloadLinks);
-
     if (!hasAnyValidDownloadLinks) {
       return new Response(JSON.stringify({
         success: false,
@@ -430,7 +376,6 @@ async function handleHashRequest(request, url) {
         },
       });
     }
-
     const responseData = {
       metadata: {
         tvShowId: tvId,
@@ -446,7 +391,6 @@ async function handleHashRequest(request, url) {
       },
       seasons: allSeasonsData,
     };
-
     return new Response(JSON.stringify({
       success: true,
       data: responseData,
@@ -456,7 +400,6 @@ async function handleHashRequest(request, url) {
         "Access-Control-Allow-Origin": "*",
       },
     });
-
   } catch (error) {
     return new Response(JSON.stringify({
       success: false,
@@ -505,7 +448,7 @@ async function fetchGoogleDriveFileInfo(driveUrl) {
         else quality = `${height}p`;
       } else if (vmm.durationMillis && data.size) {
         const durationSec = vmm.durationMillis / 1000;
-        const bitrate = (parseInt(data.size) * 8) / durationSec / 1000;
+        const bitrate = (parseInt(data.size) * 8) / durationSec / 1000; // kbps
         if (bitrate < 800) quality = '360p';
         else if (bitrate < 1500) quality = '480p';
         else if (bitrate < 3000) quality = '720p';
@@ -535,7 +478,16 @@ async function fetchPixeldrainFileInfo(url) {
     const data = await response.json();
     const size = convertBytesToHuman(data.size);
     const mimeType = data.mime_type || 'video/mp4';
-    const quality = 'unknown';
+    let quality = 'unknown';
+    // Estimate quality based on file size
+    const bytes = parseInt(data.size);
+    if (bytes) {
+      if (bytes < 100 * 1024 * 1024) quality = '360p';
+      else if (bytes < 300 * 1024 * 1024) quality = '480p';
+      else if (bytes < 700 * 1024 * 1024) quality = '720p';
+      else if (bytes < 1500 * 1024 * 1024) quality = '1080p';
+      else quality = '4K';
+    }
     return { quality, size, mimeType };
   } catch (error) {
     console.error('Error fetching Pixeldrain info:', error);
@@ -556,13 +508,10 @@ function convertBytesToHuman(bytes) {
 
 function convertSizeFormat(size) {
   if (size === 'unknown') return size;
-
   const sizeMatch = size.match(/^(\d+\.?\d*)\s*(MB|GB|KB)$/i);
   if (!sizeMatch) return size;
-
   let value = parseFloat(sizeMatch[1]);
   const unit = sizeMatch[2].toUpperCase();
-
   if (unit === 'MB' && value >= 1000) {
     value = (value / 1000).toFixed(2);
     return `${value} GB`;
@@ -576,9 +525,8 @@ function convertSizeFormat(size) {
 
 function groupLinksByQualityAndSize(links) {
   const grouped = {};
-
   links.forEach(link => {
-    const key = `${link.quality || 'unknown'}_${link.size || 'unknown'}`;
+    const key = link.quality || 'unknown';
     if (!grouped[key]) {
       grouped[key] = {
         quality: link.quality || 'unknown',
@@ -592,17 +540,14 @@ function groupLinksByQualityAndSize(links) {
       url: link.url,
     });
   });
-
   return Object.values(grouped);
 }
 
 function extractPageData(htmlContent, baseUrl) {
   const postIdMatch = htmlContent.match(/<input[^>]*id=["']post_id["'][^>]*value=["']([^"']+)["']/i);
   const postId = postIdMatch ? postIdMatch[1] : null;
-
   const urlObj = new URL(baseUrl);
   const baseDomain = `${urlObj.protocol}//${urlObj.host}`;
-
   return {
     postId,
     baseDomain,
@@ -612,16 +557,13 @@ function extractPageData(htmlContent, baseUrl) {
 
 async function fetchDownloadLinks(extractedData, originalUrl, cookieHeader) {
   const downloadLinks = [];
-
   if (!extractedData.postId) {
     return downloadLinks;
   }
-
   try {
     const formData = new FormData();
     formData.append('action', 'cs_download_data');
     formData.append('post_id', extractedData.postId);
-
     const ajaxResponse = await fetch(extractedData.ajaxUrl, {
       method: 'POST',
       body: formData,
@@ -633,7 +575,6 @@ async function fetchDownloadLinks(extractedData, originalUrl, cookieHeader) {
         "Cookie": cookieHeader,
       },
     });
-
     if (ajaxResponse.ok) {
       const ajaxData = await ajaxResponse.text();
       let parsedData;
@@ -651,22 +592,18 @@ async function fetchDownloadLinks(extractedData, originalUrl, cookieHeader) {
   } catch (error) {
     console.error('Error fetching download links:', error);
   }
-
   return downloadLinks;
 }
 
 async function extractDownloadLinksFromHtml(htmlContent) {
   const links = [];
-
   let panelContent = htmlContent;
   const hcPanelMatch = htmlContent.match(/<div[^>]*id=["']hc_panel["'][^>]*>([\s\S]*?)<\/div>/i);
   if (hcPanelMatch) {
     panelContent = hcPanelMatch[1];
   }
-
   const gdrivePattern = /<span[^>]*class=["'][^"']*btn-gdrive[^"']*hc_film[^"']*["'][^>]*data-link=["'](https:\/\/drive\.google\.com\/[^"']+)["']/gi;
   const pixeldrainPattern = /<span[^>]*class=["'][^"']*btn-pixeldrain[^"']*["'][^>]*data-link=["'](https:\/\/pixeldrain\.com\/[^"']+)["']/gi;
-
   let gdriveMatch;
   while ((gdriveMatch = gdrivePattern.exec(panelContent)) !== null) {
     const cleanUrl = gdriveMatch[1].replace(/['">\s]+$/, '');
@@ -678,7 +615,6 @@ async function extractDownloadLinksFromHtml(htmlContent) {
       mimeType: 'video/mp4',
     });
   }
-
   let pixeldrainMatch;
   while ((pixeldrainMatch = pixeldrainPattern.exec(panelContent)) !== null) {
     const cleanUrl = pixeldrainMatch[1].replace(/['">\s]+$/, '');
@@ -690,11 +626,9 @@ async function extractDownloadLinksFromHtml(htmlContent) {
       mimeType: 'video/mp4',
     });
   }
-
   const uniqueLinks = links.filter((link, index, self) =>
     index === self.findIndex(l => l.url === link.url)
   );
-
   return await Promise.all(uniqueLinks.map(async (link) => {
     if (link.type === 'google_drive') {
       const info = await fetchGoogleDriveFileInfo(link.url);
