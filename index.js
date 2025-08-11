@@ -1,20 +1,50 @@
+const http = require('http');
 const fs = require('fs').promises;
+const url = require('url');
 
-addEventListener('fetch', event => {
-  event.respondWith(handleRequest(event.request));
+const port = process.env.PORT || 3000;
+
+const server = http.createServer(async (req, res) => {
+  // Handle CORS preflight requests
+  if (req.method === 'OPTIONS') {
+    res.writeHead(200, {
+      'Access-Control-Allow-Origin': '*',
+      'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
+      'Access-Control-Allow-Headers': 'Content-Type',
+    });
+    res.end();
+    return;
+  }
+
+  try {
+    // Convert Node.js request to a fetch-like Request object
+    const requestUrl = url.parse(req.url);
+    const fullUrl = `${req.headers['x-forwarded-proto'] || 'http'}://${req.headers.host}${req.url}`;
+    const request = new Request(fullUrl, {
+      method: req.method,
+      headers: req.headers,
+    });
+
+    const response = await handleRequest(request);
+    res.writeHead(response.status, {
+      ...Object.fromEntries(response.headers),
+      'Access-Control-Allow-Origin': '*',
+    });
+    res.end(await response.text());
+  } catch (error) {
+    res.writeHead(500, {
+      'Content-Type': 'application/json',
+      'Access-Control-Allow-Origin': '*',
+    });
+    res.end(JSON.stringify({ error: error.message }));
+  }
+});
+
+server.listen(port, () => {
+  console.log(`Server running on port ${port}`);
 });
 
 async function handleRequest(request) {
-  // Handle CORS preflight requests
-  if (request.method === "OPTIONS") {
-    return new Response(null, {
-      headers: {
-        "Access-Control-Allow-Origin": "*",
-        "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
-        "Access-Control-Allow-Headers": "Content-Type",
-      },
-    });
-  }
   try {
     const url = new URL(request.url);
     if (url.pathname.startsWith("/hash/")) {
@@ -643,4 +673,17 @@ async function extractDownloadLinksFromHtml(htmlContent) {
     }
     return link;
   }));
+}
+
+// Polyfill for Response class in Node.js
+class Response {
+  constructor(body, init = {}) {
+    this.body = body;
+    this.status = init.status || 200;
+    this.headers = new Map(Object.entries(init.headers || {}));
+  }
+
+  async text() {
+    return typeof this.body === 'string' ? this.body : JSON.stringify(this.body);
+  }
 }
